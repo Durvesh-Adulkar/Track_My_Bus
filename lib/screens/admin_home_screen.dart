@@ -1,100 +1,17 @@
-// import 'package:flutter/material.dart';
-// import 'dart:io';
-// import 'package:path_provider/path_provider.dart';
-// import 'package:share_plus/share_plus.dart';
-// import '../models/bus_stop.dart';
-// import '../services/auth_service.dart';
-// import '../services/stop_service.dart';
-// import '../services/route_service.dart';
-// import '../services/bus_service.dart';
-// import '../services/request_service.dart';
-//
-// class AdminHomeScreen extends StatefulWidget {
-//   const AdminHomeScreen({super.key});
-//
-//   @override
-//   State<AdminHomeScreen> createState() => _AdminHomeScreenState();
-// }
-//
-// class _AdminHomeScreenState extends State<AdminHomeScreen> {
-//   final StopService _stopService = StopService();
-//   final RouteService _routeService = RouteService();
-//   final BusService _busService = BusService();
-//   final RequestService _reqService = RequestService();
-//
-//   @override
-//   void initState() {
-//     super.initState();
-//     _seedData();
-//   }
-//
-//   Future<void> _seedData() async {
-//     await _stopService.seedSampleStops();
-//     await _routeService.seedSampleRoutes();
-//     await _busService.seedSampleBuses();
-//     if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Sample data seeded!')));
-//   }
-//
-//   Future<void> _downloadReport() async {
-//     final requests = await _reqService.getAllRequests();  // List of maps
-//     final csv = 'ID,User,Bus,Stop,Status,Distance\n' + requests.map((r) => '${r['id']},${r['userId']},${r['busId']},${r['stopId']},${r['status']},${r['distanceBusToStop']}').join('\n');
-//     final dir = await getApplicationDocumentsDirectory();
-//     final file = File('${dir.path}/reports.csv');
-//     await file.writeAsString(csv);
-//     Share.shareXFiles([XFile(file.path)], text: 'Bus Requests Report');
-//   }
-//
-//   @override
-//   Widget build(BuildContext context) {
-//     return Scaffold(
-//       appBar: AppBar(title: const Text('Admin Panel'), actions: [IconButton(icon: const Icon(Icons.logout), onPressed: () => AuthService().logout())]),
-//       body: ListView(
-//         padding: const EdgeInsets.all(20),
-//         children: [
-//           ElevatedButton(onPressed: _seedData, child: const Text('Seed Sample Data')),
-//           ElevatedButton(onPressed: () => _showAddStopDialog(), child: const Text('Add Bus Stop')),
-//           ElevatedButton(onPressed: () => _showAddRouteDialog(), child: const Text('Add Route')),
-//           ElevatedButton(onPressed: () => _showAddBusDialog(), child: const Text('Add Bus')),
-//           ElevatedButton(onPressed: _downloadReport, child: const Text('Download Requests Report')),
-//           // Lists: Stops, Routes, Buses, Requests (use StreamBuilder)
-//           StreamBuilder<List<BusStopModel>>(
-//             stream: _stopService.getAllStops(),
-//             builder: (context, snapshot) {
-//               if (snapshot.hasData) {
-//                 return ListView.builder(
-//                   shrinkWrap: true,
-//                   itemCount: snapshot.data!.length,
-//                   itemBuilder: (context, i) => ListTile(title: Text(snapshot.data![i].name)),
-//                 );
-//               }
-//               return const Text('Loading...');
-//             },
-//           ),
-//         ],
-//       ),
-//     );
-//   }
-//
-//   void _showAddStopDialog() {
-//     // Dialog with TextFields for name, lat, lng, desc
-//     // On save: Add via _stopService.addStop(new BusStopModel(...))
-//   }
-//
-// // Similar for _showAddRouteDialog, _showAddBusDialog (include driver assign)
-// }
-// lib/screens/admin_home_screen.dart - Fixed Version
-import 'package:flutter/material.dart';
 import 'dart:io';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:excel/excel.dart' as ex;
+import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
-// import 'package:share_plus/share_plus.dart';
-import '../models/bus.dart';
-import '../models/bus_stop.dart';
-import '../models/route.dart';
-import '../services/stop_service.dart';
-import '../services/route_service.dart';
+import '../services/auth_service.dart';
 import '../services/bus_service.dart';
+import '../services/location_service.dart';
 import '../services/request_service.dart';
-import '../services/auth_service.dart';  // Added for logout
+import '../services/route_service.dart';
+import '../services/stop_service.dart';
 
 class AdminHomeScreen extends StatefulWidget {
   const AdminHomeScreen({super.key});
@@ -104,249 +21,461 @@ class AdminHomeScreen extends StatefulWidget {
 }
 
 class _AdminHomeScreenState extends State<AdminHomeScreen> {
-  final StopService _stopService = StopService();
-  final RouteService _routeService = RouteService();
+  final AuthService _authService = AuthService();
   final BusService _busService = BusService();
   final RequestService _reqService = RequestService();
+  final RouteService _routeService = RouteService();
+  final StopService _stopService = StopService();
+  final LocationService _locService = LocationService(); // For any location utils if needed
 
-  @override
-  void initState() {
-    super.initState();
-    _seedData();
-  }
+  // Data sections configuration
+  final List<Map<String, dynamic>> _dataSections = [
+    {
+      'title': 'User Logins',
+      'icon': Icons.people_outline,
+      'color': const Color(0xFF001F3F), // primaryNavy
+      'collection': 'users',
+      'model': 'UserModel',
+      'fields': ['authId', 'name', 'phone', 'email', 'role', 'currentLocation', 'preferences', 'createdAt'],
+    },
+    {
+      'title': 'Buses',
+      'icon': Icons.directions_bus,
+      'color': const Color(0xFF003366), // secondaryNavy
+      'collection': 'buses',
+      'model': 'BusModel',
+      'fields': ['id', 'name', 'number', 'driverId', 'routeId', 'route', 'currentStopIndex', 'capacity', 'currentPassengers', 'status', 'currentLocation', 'etaToNextStop', 'lastUpdated'],
+    },
+    {
+      'title': 'Bus Stops',
+      'icon': Icons.location_on,
+      'color': const Color(0xFF0066CC), // accentBlue
+      'collection': 'bus_stops',
+      'model': 'BusStopModel',
+      'fields': ['id', 'name', 'location', 'description', 'busesServing', 'sequenceInRoutes', 'createdAt'],
+    },
+    {
+      'title': 'Routes',
+      'icon': Icons.route,
+      'color': const Color(0xFF00C853), // successGreen
+      'collection': 'routes',
+      'model': 'RouteModel',
+      'fields': ['id', 'name', 'stops', 'totalDistance', 'estimatedTime', 'createdAt'],
+    },
+    {
+      'title': 'Pickup Requests',
+      'icon': Icons.request_page,
+      'color': const Color(0xFFFF9800), // warningOrange
+      'collection': 'requests',
+      'model': 'RequestModel',
+      'fields': ['id', 'userId', 'busId', 'stopId', 'userLocationAtRequest', 'status', 'notes', 'distanceBusToStop', 'distanceStopToUser', 'timestamp', 'acceptedAt'],
+    },
+    {
+      'title': 'Live Locations',
+      'icon': Icons.gps_fixed,
+      'color': const Color(0xFFE53935), // dangerRed
+      'collection': 'live_locations',
+      'model': 'LiveLocationModel',
+      'fields': ['id', 'lat', 'lng', 'timestamp', 'speed', 'heading'],
+    },
+  ];
 
-  Future<void> _seedData() async {
-    await _stopService.seedSampleStops();
-    await _routeService.seedSampleRoutes();
-    await _busService.seedSampleBuses();
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Sample data seeded!')),
-      );
-    }
-  }
-
-  Future<void> _downloadReport() async {
-    final requests = await _reqService.getAllRequests();  // List<RequestModel>
-    // Fixed: Access properties on RequestModel instead of map[]
-    final csv = 'ID,UserId,BusId,StopId,Status,DistanceBusToStop\n' +
-        requests
-            .map((r) => '${r.id},${r.userId},${r.busId},${r.stopId},${r.status},${r.distanceBusToStop}')
-            .join('\n');
-    final dir = await getApplicationDocumentsDirectory();
-    final file = File('${dir.path}/reports.csv');
-    await file.writeAsString(csv);
-    // Share.shareXFiles([XFile(file.path)], text: 'Bus Requests Report');
-  }
+  // Theme colors (matching driver UI)
+  static const Color primaryNavy = Color(0xFF001F3F);
+  static const Color secondaryNavy = Color(0xFF003366);
+  static const Color accentBlue = Color(0xFF0066CC);
+  static const Color successGreen = Color(0xFF00C853);
+  static const Color warningOrange = Color(0xFFFF9800);
+  static const Color dangerRed = Color(0xFFE53935);
+  static const Color textWhite = Colors.white;
+  static const Color cardBg = Color(0xFF002147);
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Admin Panel'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.logout),
-            onPressed: () => AuthService().logout(),
-          ),
-        ],
+    return Theme(
+      data: ThemeData.dark().copyWith(
+        colorScheme: const ColorScheme.dark(
+          primary: primaryNavy,
+          secondary: accentBlue,
+          surface: primaryNavy,
+        ),
+        textTheme: GoogleFonts.poppinsTextTheme(ThemeData.dark().textTheme),
       ),
-      body: ListView(
-        padding: const EdgeInsets.all(20),
-        children: [
-          ElevatedButton(
-            onPressed: _seedData,
-            child: const Text('Seed Sample Data'),
+      child: Scaffold(
+        backgroundColor: primaryNavy,
+        appBar: AppBar(
+          elevation: 0,
+          backgroundColor: primaryNavy,
+          title: Text(
+            'Admin Dashboard',
+            style: GoogleFonts.poppins(
+              fontSize: 22,
+              fontWeight: FontWeight.w600,
+              color: textWhite,
+            ),
           ),
-          ElevatedButton(
-            onPressed: () => _showAddStopDialog(),
-            child: const Text('Add Bus Stop'),
+          actions: [
+            Container(
+              margin: const EdgeInsets.only(right: 8),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: IconButton(
+                icon: const Icon(Icons.logout_rounded, color: textWhite),
+                onPressed: () => _authService.logout(),
+                tooltip: 'Logout',
+              ),
+            ),
+          ],
+        ),
+        body: SingleChildScrollView(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            children: [
+              // Dashboard Overview Card
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [cardBg, secondaryNavy],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  borderRadius: BorderRadius.circular(20),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.3),
+                      blurRadius: 12,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: accentBlue.withOpacity(0.2),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: const Icon(
+                            Icons.admin_panel_settings,
+                            color: accentBlue,
+                            size: 28,
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: Text(
+                            'Data Management & Exports',
+                            style: GoogleFonts.poppins(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w700,
+                              color: textWhite,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      'Download comprehensive reports for all system data in professional Excel format.',
+                      style: GoogleFonts.poppins(
+                        fontSize: 14,
+                        color: Colors.white70,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 20),
+              // Data Sections Grid
+              GridView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 2,
+                  childAspectRatio: 1.0, // Adjusted from 1.2 to 1.0 for more vertical space
+                  crossAxisSpacing: 16,
+                  mainAxisSpacing: 16,
+                ),
+                itemCount: _dataSections.length,
+                itemBuilder: (context, index) {
+                  final section = _dataSections[index];
+                  final title = section['title'] as String;
+                  final icon = section['icon'] as IconData;
+                  final color = section['color'] as Color;
+                  final collection = section['collection'] as String;
+                  return Container(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [color.withOpacity(0.1), color.withOpacity(0.05)],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: color.withOpacity(0.3), width: 1),
+                      boxShadow: [
+                        BoxShadow(
+                          color: color.withOpacity(0.2),
+                          blurRadius: 8,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
+                    ),
+                    child: Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(20),
+                        onTap: () => _downloadData(collection, section),
+                        child: Padding(
+                          padding: const EdgeInsets.all(12), // Reduced from 16 to 12 for more internal space
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            mainAxisSize: MainAxisSize.min, // Explicitly set to min to avoid unnecessary expansion
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(10), // Reduced from 12 to 10
+                                decoration: BoxDecoration(
+                                  color: color.withOpacity(0.2),
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Icon(icon, color: color, size: 28), // Reduced from 32 to 28
+                              ),
+                              const SizedBox(height: 8), // Reduced from 12 to 8
+                              Flexible( // Wrapped Text in Flexible to allow shrinking if needed
+                                child: Text(
+                                  title,
+                                  style: GoogleFonts.poppins(
+                                    fontSize: 13, // Reduced from 14 to 13
+                                    fontWeight: FontWeight.w600,
+                                    color: textWhite,
+                                  ),
+                                  textAlign: TextAlign.center,
+                                  overflow: TextOverflow.ellipsis, // Add ellipsis for long titles
+                                  maxLines: 2,
+                                ),
+                              ),
+                              const SizedBox(height: 6), // Reduced from 8 to 6
+                              SizedBox( // Wrapped button in SizedBox with fixed height to control size
+                                height: 36, // Fixed smaller height for button
+                                child: ElevatedButton.icon(
+                                  onPressed: () => _downloadData(collection, section),
+                                  icon: const Icon(Icons.download, size: 16), // Reduced icon size
+                                  label: Text(
+                                    'Download',
+                                    style: GoogleFonts.poppins(fontSize: 11), // Reduced from 12 to 11
+                                  ),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: color,
+                                    foregroundColor: textWhite,
+                                    elevation: 2,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(8), // Slightly smaller radius
+                                    ),
+                                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4), // Compact padding
+                                    minimumSize: const Size(0, 0), // Allow smaller size
+                                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+              const SizedBox(height: 20),
+              // Seed Data Button (Optional, for initial setup)
+              Container(
+                width: double.infinity,
+                height: 56,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [warningOrange.withOpacity(0.2), warningOrange.withOpacity(0.1)],
+                  ),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: warningOrange.withOpacity(0.3)),
+                ),
+                child: ElevatedButton.icon(
+                  onPressed: _seedAllData,
+                  icon: const Icon(Icons.add, color: textWhite),
+                  label: Text(
+                    'Seed Sample Data (If Collections Empty)',
+                    style: GoogleFonts.poppins(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: textWhite,
+                    ),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: warningOrange,
+                    foregroundColor: textWhite,
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
-          ElevatedButton(
-            onPressed: () => _showAddRouteDialog(),
-            child: const Text('Add Route'),
-          ),
-          ElevatedButton(
-            onPressed: () => _showAddBusDialog(),
-            child: const Text('Add Bus'),
-          ),
-          ElevatedButton(
-            onPressed: _downloadReport,
-            child: const Text('Download Requests Report'),
-          ),
-          // Lists: Stops, Routes, Buses, Requests (use StreamBuilder)
-          StreamBuilder<List<BusStopModel>>(
-            stream: _stopService.getAllStops(),
-            builder: (context, snapshot) {
-              if (snapshot.hasData) {
-                return ListView.builder(
-                  shrinkWrap: true,
-                  itemCount: snapshot.data!.length,
-                  itemBuilder: (context, i) =>
-                      ListTile(title: Text(snapshot.data![i].name)),
-                );
-              }
-              return const Text('Loading...');
-            },
-          ),
-        ],
+        ),
       ),
     );
   }
 
-  // Implemented: Simple dialog for adding stop
-  void _showAddStopDialog() {
-    final nameController = TextEditingController();
-    final latController = TextEditingController();
-    final lngController = TextEditingController();
-    final descController = TextEditingController();
-    final idController = TextEditingController(text: 'stopId_${DateTime.now().millisecondsSinceEpoch}');  // Auto-gen ID
-
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Add Bus Stop'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(controller: idController, decoration: const InputDecoration(labelText: 'Stop ID')),
-            TextField(controller: nameController, decoration: const InputDecoration(labelText: 'Name')),
-            TextField(controller: latController, decoration: const InputDecoration(labelText: 'Latitude'), keyboardType: TextInputType.number),
-            TextField(controller: lngController, decoration: const InputDecoration(labelText: 'Longitude'), keyboardType: TextInputType.number),
-            TextField(controller: descController, decoration: const InputDecoration(labelText: 'Description')),
-          ],
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-          TextButton(
-            onPressed: () async {
-              final lat = double.tryParse(latController.text) ?? 0.0;
-              final lng = double.tryParse(lngController.text) ?? 0.0;
-              final stop = BusStopModel(
-                id: idController.text,
-                name: nameController.text,
-                location: {'lat': lat, 'lng': lng},
-                description: descController.text,
-                busesServing: [],
-                sequenceInRoutes: {},
-                createdAt: DateTime.now(),
-              );
-              await _stopService.addStop(stop);
-              if (mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Stop added!')));
-                Navigator.pop(context);
-              }
-            },
-            child: const Text('Add'),
+  Future<void> _downloadData(String collection, Map<String, dynamic> section) async {
+    try {
+      // Show loading dialog
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => AlertDialog(
+          backgroundColor: primaryNavy,
+          content: Row(
+            children: const [
+              CircularProgressIndicator(color: accentBlue),
+              SizedBox(width: 16),
+              Text('Generating Excel...', style: TextStyle(color: textWhite)),
+            ],
           ),
-        ],
-      ),
-    );
+        ),
+      );
+
+      // Fetch from Firebase
+      final snapshot =
+      await FirebaseFirestore.instance.collection(collection).get();
+
+      if (snapshot.docs.isEmpty) {
+        Navigator.pop(context);
+        _showSnackBar('No data found in $collection', warningOrange);
+        return;
+      }
+
+      // Create Excel
+      final excel = ex.Excel.createExcel();
+      final sheet = excel['Sheet1'];
+      final fields = section['fields'] as List<String>;
+
+      // ----- WRITE HEADER -----
+      for (int i = 0; i < fields.length; i++) {
+        final cell = sheet.cell(
+          ex.CellIndex.indexByString('${String.fromCharCode(65 + i)}1'),
+        );
+        cell.value = ex.TextCellValue(fields[i].toUpperCase());
+      }
+
+      // ----- WRITE ROWS -----
+      int row = 2;
+      for (var doc in snapshot.docs) {
+        final data = doc.data();
+        final docId = doc.id;
+
+        for (int i = 0; i < fields.length; i++) {
+          final field = fields[i];
+          dynamic value = data[field];
+
+          if (value is Timestamp) {
+            value = value.toDate().toString();
+          } else if (value is Map || value is List) {
+            value = value.toString();
+          } else if (value == null) {
+            value = '';
+          }
+
+          final cell = sheet.cell(
+            ex.CellIndex.indexByString('${String.fromCharCode(65 + i)}$row'),
+          );
+          cell.value = ex.TextCellValue(value.toString());
+        }
+
+        // If ID not included
+        if (!fields.contains('id') && !fields.contains('authId')) {
+          final idCell =
+          sheet.cell(ex.CellIndex.indexByString('A$row'));
+          idCell.value = ex.TextCellValue(docId);
+        }
+        row++;
+      }
+
+      // Set column width
+      for (int i = 0; i < fields.length; i++) {
+        sheet.setColumnWidth(i, 20);
+      }
+
+      // -------------------------
+      // STORAGE PERMISSION
+      // -------------------------
+      final status = await Permission.storage.request();
+      if (!status.isGranted) {
+        Navigator.pop(context);
+        _showSnackBar('Storage permission denied.', dangerRed);
+        return;
+      }
+
+      // -------------------------
+      // GET SAFE DIRECTORY
+      // -------------------------
+      final directory = await getExternalStorageDirectory();
+
+      if (directory == null) {
+        Navigator.pop(context);
+        _showSnackBar('Unable to access storage directory.', dangerRed);
+        return;
+      }
+
+      final fileName =
+          '${collection}_report_${DateTime.now().millisecondsSinceEpoch}.xlsx';
+
+      final file = File('${directory.path}/$fileName');
+
+      final bytes = excel.encode()!;
+      await file.writeAsBytes(bytes);
+
+      // Open file automatically
+      await OpenFilex.open(file.path);
+
+      Navigator.pop(context);
+      _showSnackBar(
+          'Export successful. Saved to app folder.\n$fileName', successGreen);
+    } catch (e) {
+      Navigator.pop(context);
+      _showSnackBar('Error exporting data: $e', dangerRed);
+    }
   }
 
-  // Implemented: Simple dialog for adding route
-  void _showAddRouteDialog() {
-    final nameController = TextEditingController();
-    final stopsController = TextEditingController(text: 'stopId_1,stopId_2');  // Comma-separated
-    final distanceController = TextEditingController();
-    final timeController = TextEditingController();
-    final idController = TextEditingController(text: 'routeId_${DateTime.now().millisecondsSinceEpoch}');
 
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Add Route'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(controller: idController, decoration: const InputDecoration(labelText: 'Route ID')),
-            TextField(controller: nameController, decoration: const InputDecoration(labelText: 'Name')),
-            TextField(controller: stopsController, decoration: const InputDecoration(labelText: 'Stops (comma-separated IDs)')),
-            TextField(controller: distanceController, decoration: const InputDecoration(labelText: 'Total Distance (KM)'), keyboardType: TextInputType.number),
-            TextField(controller: timeController, decoration: const InputDecoration(labelText: 'Estimated Time (Min)'), keyboardType: TextInputType.number),
-          ],
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-          TextButton(
-            onPressed: () async {
-              final distance = double.tryParse(distanceController.text) ?? 0.0;
-              final time = int.tryParse(timeController.text) ?? 0;
-              final stops = stopsController.text.split(',').map((s) => s.trim()).toList();
-              final route = RouteModel(
-                id: idController.text,
-                name: nameController.text,
-                stops: stops,
-                totalDistance: distance,
-                estimatedTime: time,
-                createdAt: DateTime.now(),
-              );
-              await _routeService.addOrUpdateRoute(route);
-              if (mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Route added!')));
-                Navigator.pop(context);
-              }
-            },
-            child: const Text('Add'),
-          ),
-        ],
-      ),
-    );
+  Future<void> _seedAllData() async {
+    try {
+      bool seeded = false;
+      // Seed stops (void return, assume seeded if called)
+      await _stopService.seedSampleStops();
+      seeded = true;
+      // Seed routes
+      final routesSeeded = await _routeService.seedSampleRoutes();
+      if (routesSeeded) seeded = true;
+      _showSnackBar(seeded ? 'Sample data seeded successfully!' : 'Data already exists.', seeded ? successGreen : warningOrange);
+    } catch (e) {
+      _showSnackBar('Error seeding data: $e', dangerRed);
+    }
   }
 
-  // Implemented: Simple dialog for adding bus
-  void _showAddBusDialog() {
-    final nameController = TextEditingController();
-    final numberController = TextEditingController();
-    final driverIdController = TextEditingController();
-    final routeIdController = TextEditingController();
-    final capacityController = TextEditingController();
-    final idController = TextEditingController(text: 'busId_${DateTime.now().millisecondsSinceEpoch}');
-
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Add Bus'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(controller: idController, decoration: const InputDecoration(labelText: 'Bus ID')),
-            TextField(controller: nameController, decoration: const InputDecoration(labelText: 'Name')),
-            TextField(controller: numberController, decoration: const InputDecoration(labelText: 'Number (License)')),
-            TextField(controller: driverIdController, decoration: const InputDecoration(labelText: 'Driver ID')),
-            TextField(controller: routeIdController, decoration: const InputDecoration(labelText: 'Route ID')),
-            TextField(controller: capacityController, decoration: const InputDecoration(labelText: 'Capacity'), keyboardType: TextInputType.number),
-          ],
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-          TextButton(
-            onPressed: () async {
-              final capacity = int.tryParse(capacityController.text) ?? 0;
-              final bus = BusModel(
-                id: idController.text,
-                name: nameController.text,
-                number: numberController.text,
-                driverId: driverIdController.text,
-                routeId: routeIdController.text,
-                route: [],  // Set later or from route
-                currentStopIndex: 0,
-                capacity: capacity,
-                currentPassengers: 0,
-                status: 'offline',
-                currentLocation: {'lat': 0.0, 'lng': 0.0},
-                etaToNextStop: 0.0,
-                lastUpdated: DateTime.now(),
-              );
-              await _busService.addOrUpdateBus(bus);
-              if (mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Bus added!')));
-                Navigator.pop(context);
-              }
-            },
-            child: const Text('Add'),
-          ),
-        ],
+  void _showSnackBar(String message, Color color) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message, style: GoogleFonts.poppins(color: textWhite)),
+        backgroundColor: color,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        margin: const EdgeInsets.all(16),
       ),
     );
   }

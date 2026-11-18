@@ -1,4 +1,3 @@
-// lib/services/location_service.dart
 import 'dart:async';
 import 'dart:math';
 import 'package:cloud_firestore/cloud_firestore.dart';

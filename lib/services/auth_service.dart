@@ -1,85 +1,3 @@
-// import 'package:firebase_auth/firebase_auth.dart';
-// import 'package:cloud_firestore/cloud_firestore.dart';
-// import '../models/user.dart';
-//
-// class AuthService {
-//   final FirebaseAuth _auth = FirebaseAuth.instance;
-//   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-//
-//   // Get current user
-//   User? get currentUser => _auth.currentUser;
-//
-//   // Create/Update user profile on signup/login
-//   Future<UserModel?> createOrUpdateUser({
-//     required String email,
-//     required String password,
-//     required String name,
-//     required String phone,
-//     required String role,
-//     Map<String, double>? location,
-//   }) async {
-//     try {
-//       UserCredential cred;
-//       if (_auth.currentUser == null) {
-//         cred = await _auth.createUserWithEmailAndPassword(email: email, password: password);
-//       } else {
-//         cred = await _auth.signInWithEmailAndPassword(email: email, password: password);
-//       }
-//       final userId = cred.user!.uid;
-//       final userRef = _firestore.collection('users').doc(userId);
-//       await userRef.set({
-//         'authId': userId,
-//         'name': name,
-//         'phone': phone,
-//         'email': email,
-//         'role': role,
-//         'currentLocation': location ?? {},
-//         'preferences': {'maxDistance': 500},
-//         'createdAt': FieldValue.serverTimestamp(),
-//       }, SetOptions(merge: true));
-//       return UserModel(
-//         id: userId,
-//         authId: userId,
-//         name: name,
-//         phone: phone,
-//         email: email,
-//         role: role,
-//         currentLocation: Map<String, double>.from(location ?? {}),
-//         preferences: {'maxDistance': 500},
-//         createdAt: DateTime.now(),
-//       );
-//     } catch (e) {
-//       throw Exception('Auth error: $e');
-//     }
-//   }
-//
-//   // Login
-//   Future<UserModel?> login(String email, String password) async {
-//     try {
-//       final cred = await _auth.signInWithEmailAndPassword(email: email, password: password);
-//       final role = await getUserRole(cred.user!.uid);
-//       final doc = await _firestore.collection('users').doc(cred.user!.uid).get();
-//       return UserModel.fromMap(doc.data()!, cred.user!.uid);
-//     } catch (e) {
-//       throw Exception('Login failed: $e');
-//     }
-//   }
-//
-//   // Get role
-//   Future<String> getUserRole(String userId) async {
-//     final doc = await _firestore.collection('users').doc(userId).get();
-//     return doc.data()?['role'] ?? 'passenger';
-//   }
-//
-//   // Logout
-//   Future<void> logout() async {
-//     await _auth.signOut();
-//   }
-//
-//   // Hardcoded Admin Check
-//   bool isAdmin(String email) => email == 'admin@example.com';
-// }
-
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart'; // for debugPrint
@@ -107,10 +25,16 @@ class AuthService {
       UserCredential cred;
       if (_auth.currentUser == null) {
         debugPrint('No current user, creating new account...');
-        cred = await _auth.createUserWithEmailAndPassword(email: email, password: password);
+        cred = await _auth.createUserWithEmailAndPassword(
+          email: email,
+          password: password,
+        );
       } else {
         debugPrint('User already logged in, signing in...');
-        cred = await _auth.signInWithEmailAndPassword(email: email, password: password);
+        cred = await _auth.signInWithEmailAndPassword(
+          email: email,
+          password: password,
+        );
       }
 
       final userId = cred.user!.uid;
@@ -129,7 +53,9 @@ class AuthService {
         'createdAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
 
-      debugPrint('Firestore user document created/updated successfully for $email');
+      debugPrint(
+        'Firestore user document created/updated successfully for $email',
+      );
 
       return UserModel(
         id: userId,
@@ -154,12 +80,16 @@ class AuthService {
     try {
       debugPrint('AuthService: Attempting login for $email');
 
-      final cred = await _auth.signInWithEmailAndPassword(email: email, password: password);
+      final cred = await _auth.signInWithEmailAndPassword(
+        email: email,
+        password: password,
+      );
       final role = await getUserRole(cred.user!.uid);
 
       debugPrint('Login successful for $email (Role: $role)');
 
-      final doc = await _firestore.collection('users').doc(cred.user!.uid).get();
+      final doc =
+          await _firestore.collection('users').doc(cred.user!.uid).get();
 
       if (!doc.exists) {
         debugPrint('No Firestore user document found for ${cred.user!.uid}');

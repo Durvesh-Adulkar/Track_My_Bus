@@ -1,4 +1,3 @@
-// lib/models/route.dart
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 class RouteModel {
